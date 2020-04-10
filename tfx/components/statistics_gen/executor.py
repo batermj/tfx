@@ -24,8 +24,8 @@ from typing import Any, Dict, List, Text
 import absl
 import apache_beam as beam
 from tensorflow_data_validation.api import stats_api
-from tensorflow_data_validation.coders import tf_example_decoder
 from tensorflow_data_validation.statistics import stats_options as options
+from tfx_bsl.tfxio import tf_example_record
 
 from tensorflow_metadata.proto.v0 import statistics_pb2
 from tfx import types
@@ -46,6 +46,8 @@ STATISTICS_KEY = 'statistics'
 
 # Default file name for stats generated.
 _DEFAULT_FILE_NAME = 'stats_tfrecord'
+
+_TELEMETRY_DESCRIPTORS = ['StatisticsGen']
 
 
 class Executor(base_executor.BaseExecutor):
@@ -115,17 +117,18 @@ class Executor(base_executor.BaseExecutor):
       for split, uri in split_uris:
         absl.logging.info('Generating statistics for split {}'.format(split))
         input_uri = io_utils.all_files_pattern(uri)
+        tfxio = tf_example_record.TFExampleRecord(
+            file_pattern=input_uri,
+            telemetry_descriptors=_TELEMETRY_DESCRIPTORS)
         output_uri = artifact_utils.get_split_uri(output_dict[STATISTICS_KEY],
                                                   split)
         output_path = os.path.join(output_uri, _DEFAULT_FILE_NAME)
         _ = (
             p
-            | 'ReadData.' + split >>
-            beam.io.ReadFromTFRecord(file_pattern=input_uri)
-            | 'DecodeData.' + split >> tf_example_decoder.DecodeTFExample()
-            | 'GenerateStatistics.' + split >>
+            | 'TFXIORead[{}]'.format(split) >> tfxio.BeamSource()
+            | 'GenerateStatistics[{}]'.format(split) >>
             stats_api.GenerateStatistics(stats_options)
-            | 'WriteStatsOutput.' + split >> beam.io.WriteToTFRecord(
+            | 'WriteStatsOutput[{}]'.format(split) >> beam.io.WriteToTFRecord(
                 output_path,
                 shard_name_template='',
                 coder=beam.coders.ProtoCoder(
